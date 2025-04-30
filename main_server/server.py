@@ -6,6 +6,11 @@ from typing import Dict, Any, Tuple
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -17,16 +22,29 @@ class TextClassifier:
         self.tokenizer_path = tokenizer_path
         self.model = None
         self.tokenizer = None
+        logger.info(f"Initializing classifier with model: {model_path}")
 
     def load_model(self) -> None:
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"Model not found at {self.model_path}")
-        self.model = tf.saved_model.load(self.model_path)
+        try:
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"Model not found at {self.model_path}")
+            logger.info(f"Loading model from {self.model_path}")
+            self.model = tf.saved_model.load(self.model_path)
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            raise
 
     def load_tokenizer(self) -> None:
-        if not os.path.exists(self.tokenizer_path):
-            raise FileNotFoundError(f"Tokenizer not found at {self.tokenizer_path}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
+        try:
+            if not os.path.exists(self.tokenizer_path):
+                raise FileNotFoundError(f"Tokenizer not found at {self.tokenizer_path}")
+            logger.info(f"Loading tokenizer from {self.tokenizer_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
+            logger.info("Tokenizer loaded successfully")
+        except Exception as e:
+            logger.error(f"Error loading tokenizer: {str(e)}")
+            raise
 
     def predict(self, text: str) -> Dict[str, Any]:
         try:
@@ -69,7 +87,7 @@ class TextClassifier:
             }
             
         except Exception as e:
-            print(f"Error during prediction: {str(e)}")
+            logger.error(f"Error during prediction: {str(e)}")
             return {
                 'error': str(e),
                 'timestamp': int(time.time() * 1000)
@@ -81,8 +99,10 @@ models_dir = os.path.join(base_dir, "models")
 model_path = os.path.join(models_dir, "fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32")
 tokenizer_path = os.path.join(models_dir, "tkn_for_fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32")
 
-print(f"Loading model from: {model_path}")
-print(f"Loading tokenizer from: {tokenizer_path}")
+logger.info(f"Base directory: {base_dir}")
+logger.info(f"Models directory: {models_dir}")
+logger.info(f"Loading model from: {model_path}")
+logger.info(f"Loading tokenizer from: {tokenizer_path}")
 
 classifier = TextClassifier(model_path, tokenizer_path)
 
@@ -108,15 +128,26 @@ def classify_batch():
         return jsonify(results)
 
     except Exception as e:
+        logger.error(f"Error in classify_batch endpoint: {str(e)}")
         return jsonify({
             'error': str(e),
             'timestamp': int(time.time() * 1000)
         }), 500
 
+# Health check endpoint
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
+
 def main():
-    classifier.load_model()
-    classifier.load_tokenizer()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    try:
+        classifier.load_model()
+        classifier.load_tokenizer()
+        port = int(os.environ.get('PORT', 10000))
+        app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()

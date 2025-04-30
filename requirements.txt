@@ -1,6 +1,7 @@
-tensorflow
-flask
-flask-cors
-numpy
-transformers
-gunicorn
+tensorflow-cpu==2.15.0  # Using CPU version to save memory on Render
+flask==3.0.0
+flask-cors==4.0.0
+numpy==1.24.3
+transformers==4.36.0
+gunicorn==21.2.0
+typing-extensions==4.8.0
