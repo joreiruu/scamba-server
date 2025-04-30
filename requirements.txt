@@ -1,15 +1,6 @@
-# Web Framework
-flask==3.0.0
-flask-cors==4.0.0
-
-# Machine Learning & Data Science
-tensorflow==2.15.0
-transformers==4.36.0
-numpy==1.24.3
-
-# Utilities
-typing-extensions==4.8.0
-requests==2.31.0
-
-# Optional but recommended for production
-gunicorn==21.2.0
+tensorflow
+flask
+flask-cors
+numpy
+transformers
+gunicorn
