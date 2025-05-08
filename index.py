@@ -2,18 +2,35 @@ import tensorflow as tf
 import numpy as np
 from transformers import AutoTokenizer
 import os
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, List
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
+from concurrent.futures import ThreadPoolExecutor
+import gc
 import logging
+import sys
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('server.log')
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Enable memory growth for GPU if available
+physical_devices = tf.config.list_physical_devices('GPU')
+if physical_devices:
+    for device in physical_devices:
+        tf.config.experimental.set_memory_growth(device, True)
 
 app = Flask(__name__)
 CORS(app)
+executor = ThreadPoolExecutor(max_workers=8)  # Adjust based on your CPU cores
 
 class TextClassifier:
     def __init__(self, model_path: str, tokenizer_path: str, max_length: int = 128):
@@ -22,29 +39,16 @@ class TextClassifier:
         self.tokenizer_path = tokenizer_path
         self.model = None
         self.tokenizer = None
-        logger.info(f"Initializing classifier with model: {model_path}")
 
     def load_model(self) -> None:
-        try:
-            if not os.path.exists(self.model_path):
-                raise FileNotFoundError(f"Model not found at {self.model_path}")
-            logger.info(f"Loading model from {self.model_path}")
-            self.model = tf.saved_model.load(self.model_path)
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
-            raise
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(f"Model not found at {self.model_path}")
+        self.model = tf.saved_model.load(self.model_path)
 
     def load_tokenizer(self) -> None:
-        try:
-            if not os.path.exists(self.tokenizer_path):
-                raise FileNotFoundError(f"Tokenizer not found at {self.tokenizer_path}")
-            logger.info(f"Loading tokenizer from {self.tokenizer_path}")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
-            logger.info("Tokenizer loaded successfully")
-        except Exception as e:
-            logger.error(f"Error loading tokenizer: {str(e)}")
-            raise
+        if not os.path.exists(self.tokenizer_path):
+            raise FileNotFoundError(f"Tokenizer not found at {self.tokenizer_path}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
 
     def predict(self, text: str) -> Dict[str, Any]:
         try:
@@ -94,17 +98,17 @@ class TextClassifier:
             }
 
 # Initialize classifier globally
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-models_dir = os.path.join(base_dir, "models")
-model_path = os.path.join(models_dir, "fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32")
-tokenizer_path = os.path.join(models_dir, "tkn_for_fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32")
-
-logger.info(f"Base directory: {base_dir}")
-logger.info(f"Models directory: {models_dir}")
-logger.info(f"Loading model from: {model_path}")
-logger.info(f"Loading tokenizer from: {tokenizer_path}")
-
+current_dir = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(current_dir, 'fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32')
+tokenizer_path = os.path.join(current_dir, 'tkn_for_fin_best__XLM-RoBERTa__lr3e-05_ep65_bs32')
 classifier = TextClassifier(model_path, tokenizer_path)
+
+# Load model and tokenizer immediately
+try:
+    classifier.load_model()
+    classifier.load_tokenizer()
+except Exception as e:
+    logger.error(f"Error loading model or tokenizer: {str(e)}")
 
 @app.route('/classify_batch', methods=['POST'])
 def classify_batch():
@@ -117,14 +121,19 @@ def classify_batch():
         if not isinstance(texts, list) or not texts:
             return jsonify({'error': 'texts must be a non-empty list'}), 400
 
+        # Parallel processing of predictions
+        futures = [executor.submit(classifier.predict, text) for text in texts]
         results = []
-        for text in texts:
-            result = classifier.predict(text)
+        
+        for text, future in zip(texts, futures):
+            result = future.result()
             results.append({
                 'text': text,
-                **result  # Include all prediction results including timestamp
+                **result
             })
 
+        # Explicit garbage collection after batch processing
+        gc.collect()
         return jsonify(results)
 
     except Exception as e:
@@ -134,20 +143,12 @@ def classify_batch():
             'timestamp': int(time.time() * 1000)
         }), 500
 
-# Health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy'}), 200
-
-def main():
-    try:
-        classifier.load_model()
-        classifier.load_tokenizer()
-        port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
-        raise
-
-if __name__ == "__main__":
-    main()
+    """Endpoint to check server status"""
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': classifier.model is not None,
+        'tokenizer_loaded': classifier.tokenizer is not None,
+        'gpu_available': len(tf.config.list_physical_devices('GPU')) > 0
+    })
